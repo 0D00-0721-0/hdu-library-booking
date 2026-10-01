@@ -3,7 +3,7 @@
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -254,7 +254,9 @@ class Clock:
 
     def __init__(self):
         self.elapsed = 0.0
-        self.start = datetime(2026, 9, 20, 19, 59, 59, tzinfo=timezone(timedelta(hours=8)))
+        # Scheduled HH:MM values use the machine's local clock. Keep the fake
+        # wall clock in that same zone instead of assuming the runner is UTC+8.
+        self.start = datetime(2026, 9, 20, 19, 59, 59).astimezone()
 
     def now(self):
         return self.start + timedelta(seconds=self.elapsed)

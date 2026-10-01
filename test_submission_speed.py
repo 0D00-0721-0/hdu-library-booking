@@ -3,7 +3,7 @@
 import base64
 import hashlib
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import requests
@@ -19,7 +19,8 @@ class VirtualClock:
 
     def __init__(self):
         self.elapsed = 0.0
-        self.origin = datetime(2026, 9, 20, 19, 59, 59, tzinfo=timezone(timedelta(hours=8)))
+        # Match the local-time schedule parser on developer and CI machines.
+        self.origin = datetime(2026, 9, 20, 19, 59, 59).astimezone()
 
     def now(self):
         return self.origin + timedelta(seconds=self.elapsed)

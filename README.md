@@ -106,6 +106,8 @@ python web_app.py --open
 
 布尔值使用不带引号的 `true` / `false`；时间字符串带引号。Cookie 文件的相对路径从当前工作目录解析，因此运行前请进入项目目录。自定义配置文件可使用 `--config /path/to/config.yaml`。
 
+执行时间和预约日期使用电脑的本地时区。预约 HDU 座位时，请确认系统时区为 `Asia/Shanghai`，并保持系统时间准确。
+
 ## 常见问题
 
 - **提示缺少配置**：先复制 `config.example.yaml` 为 `config.yaml`；确认当前项目目录或 `--config` 参数。
@@ -208,7 +210,7 @@ python -m unittest discover -v
 node test_web_polling.js
 ```
 
-GitHub Actions 在 main 推送、Pull Request 和手动触发时运行上述检查，覆盖 Ubuntu 的 Python 3.11 / 3.12 / 3.13，以及 macOS 的 Python 3.13。Node.js 22 用于页面测试，无需额外 npm 依赖。
+GitHub Actions 在 main 推送、Pull Request 和手动触发时运行上述检查，覆盖 Ubuntu 的 Python 3.11 / 3.12 / 3.13，以及 macOS 的 Python 3.13；Python 测试分别在 UTC 和 Asia/Shanghai 时区运行。Node.js 22 用于页面测试，无需额外 npm 依赖。
 
 回归测试使用模拟响应与虚拟时钟，覆盖超时复核、跨楼层同号座位、停止任务、签到状态、预热预算及配置写入失败，也验证响应后 3 秒冷却、连续客户端共享冷却、签名和 Cookie 刷新、慢日志对首包的影响，不会向图书馆发送测试请求。配置回归覆盖首次运行提示、错误字段、Cookie 格式和离线检查。网页保存配置会先校验内容，再原子替换文件，避免写入中断破坏原配置。
 
