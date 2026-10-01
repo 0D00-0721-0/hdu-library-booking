@@ -1,0 +1,8 @@
+.cloudflare-access-password
+__pycache__/
+logs/
+output/
+.DS_Store
+config.yaml
+.backups/
+.playwright-cli/
