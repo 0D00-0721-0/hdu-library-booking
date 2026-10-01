@@ -1,6 +1,120 @@
 # HDU 图书馆即时预约
 
-这个目录是一个独立的小工具。它使用浏览器保存下来的 cookie 登录态，按指定计划提交一次预约请求；默认等到 20:00 再提交。
+[![Tests](https://github.com/0D00-0721-0/libcs/actions/workflows/tests.yml/badge.svg)](https://github.com/0D00-0721-0/libcs/actions/workflows/tests.yml)
+
+使用自己的浏览器 Cookie 登录态，查询座位、按计划预约，并复核预约、取消、签到和续座结果。提供命令行和本地网页控制台，支持备选座位、定时提交与服务端时钟测量。
+
+这是面向 HDU 图书馆当前接口的个人工具。需要你能正常访问并登录官方系统；接口、开放时间及可预约范围以官方服务为准。
+
+## 快速开始
+
+### 1. 安装与复制配置
+
+推荐 Python 3.11–3.13。下面是 macOS / Linux 终端命令；macOS 双击启动脚本会优先使用项目内的 `.venv`。
+
+```bash
+git clone https://github.com/0D00-0721-0/libcs.git
+cd libcs
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp config.example.yaml config.yaml
+mkdir -p cookies
+chmod 600 config.yaml
+chmod 700 cookies
+```
+
+后续运行命令前，先进入项目目录并执行 `source .venv/bin/activate`。不要用新模板覆盖自己已有的 `config.yaml`。
+
+### 2. 准备自己的登录态
+
+先在浏览器登录 [HDU 慧图系统](https://hdu.huitu.zhishulib.com/)，确认官方页面能读取你的预约信息。下面两种方式任选一种：
+
+- **Cookie JSON 文件**：将该域名的 Cookie 保存为 `cookies/session.json`，保留模板中的 `auth.cookie_file`。支持 Cookie 数组，或包含 `cookies` 数组的对象；每项需有 `name`、`value`，可带 `domain`、`path`、`secure`。
+- **Cookie 请求头**：在浏览器开发者工具的 Network 面板刷新官方页面，选择发往 `hdu.huitu.zhishulib.com` 的已登录请求，从 Headers 的 Request Headers 复制 `Cookie` 值。将其填入 `auth.cookie`，同时把 `auth.cookie_file` 设为空字符串。Chrome 操作可参考 [官方 Network 文档](https://developer.chrome.com/docs/devtools/network/reference#headers)。
+
+Cookie JSON 的结构如下。这里的名称和值只是占位符，不能登录：
+
+```json
+{
+  "cookies": [
+    {
+      "name": "REPLACE_WITH_COOKIE_NAME",
+      "value": "REPLACE_WITH_COOKIE_VALUE",
+      "domain": "hdu.huitu.zhishulib.com",
+      "path": "/",
+      "secure": true
+    }
+  ]
+}
+```
+
+请求头方式对应的 YAML 配置：
+
+```yaml
+auth:
+  cookie_file: ""
+  cookie: "在此粘贴你自己的完整 Cookie 值"
+```
+
+`user_info.uid` 和 `name` 默认留空，工具会尝试自动识别。若提示未识别 UID，它指慧图内部用户 ID，不能直接用学号替代。Cookie 过期后需要重新登录并更新；不要将 Cookie、配置或浏览器导出文件发到 Issue。
+
+### 3. 离线检查，再测试登录与计划
+
+修改 `config.yaml` 中的 `booking.plan`；模板座位和时段只是示例。首次使用保留 `dry_run: true`、`session.verify: true` 和 `hold_before_minutes: 0`。
+
+```bash
+python instant_book.py --check-config
+python instant_book.py --list-bookings
+python instant_book.py --dry-run --days 2 --execute-at ""
+```
+
+`--check-config` 只在本机检查配置结构、计划格式和 Cookie 文件格式，不联网，也不输出登录态内容。通过不表示登录仍然有效。
+
+`--list-bookings` 会向官方服务查询当前预约；dry-run 会进行登录校验与座位查询，展示脱敏后的请求参数，**不预约、不锁座**。座位信息查询可能使用 HTTP POST，因此 dry-run 不是完全离线模式。
+
+dry-run 只控制预约流程；取消预约、签到和续座是独立操作，会实际执行。
+
+确认查询与计划正确后，命令行真实预约需将配置中的 `booking.dry_run` 改为 `false`；`--dry-run` 参数始终强制只查询。网页操作需确认“只测试，不提交”选项的状态，再选择立即预约或定时预约。
+
+### 4. 启动网页控制台
+
+```bash
+python web_app.py --open
+```
+
+也可以在 macOS Finder 双击 `start_web.command`。终端显示本地访问地址，按 `Ctrl+C` 停止服务。命令行与网页读取同一个 `config.yaml`。
+
+## 配置说明
+
+完整字段及默认值见 [config.example.yaml](config.example.yaml)。修改配置后可再次运行 `--check-config`。
+
+| 字段 | 用途 |
+| --- | --- |
+| `auth.cookie_file` / `auth.cookie` | Cookie 文件或请求头，通常选一种 |
+| `session.verify` | HTTPS 证书验证，默认 `true` |
+| `session.trust_env` | 是否使用环境中的代理配置，默认 `false` |
+| `request.timeout` | 单次请求超时，单位秒 |
+| `request.keepalive_interval` | 定时等待时的心跳间隔；`0` 关闭 |
+| `booking.plan` | 房间类型、楼层 ID、座位号、开始小时、时长 |
+| `booking.book_days` | 日期偏移：`0` 今天、`1` 明天、`2` 后天 |
+| `booking.execute_at` | 发送时间，可带毫秒；空字符串表示立即 |
+| `booking.fallback_seats` | 备选座位号，逗号分隔，最多 5 个 |
+| `booking.max_trials` / `retry_delay` | 有界重试次数与响应后的等待秒数 |
+| `booking.hold_before_minutes` | 提前锁座分钟数，`0` 关闭 |
+| `booking.dry_run` | `true` 只查询，`false` 允许真实预约 |
+
+布尔值使用不带引号的 `true` / `false`；时间字符串带引号。Cookie 文件的相对路径从当前工作目录解析，因此运行前请进入项目目录。自定义配置文件可使用 `--config /path/to/config.yaml`。
+
+## 常见问题
+
+- **提示缺少配置**：先复制 `config.example.yaml` 为 `config.yaml`；确认当前项目目录或 `--config` 参数。
+- **找不到 Cookie 文件 / JSON 格式错误**：核对 `auth.cookie_file`，确认文件是 UTF-8 JSON，格式符合上面的示例。
+- **无法导入 requests / yaml**：激活 `.venv`，然后用同一个 Python 执行 `python -m pip install -r requirements.txt`。
+- **登录失效、用户不匹配或要求验证码**：回到官方系统重新登录，更新该账号的 Cookie；不要混用不同账号的 UID 与 Cookie。
+- **证书验证失败**：检查系统时间、证书或代理设置，保留 `session.verify: true`。
+- **结果待确认**：先刷新官方预约列表或运行 `--list-bookings`，确认实际状态后再决定后续操作。退出码 `2` 表示已发出的操作结果无法确认，`1` 表示普通失败。
+- **接口或楼层变化**：先在网页重新选择楼层。反馈问题时附 Python 版本、复现步骤和脱敏日志，移除 Cookie、UID、姓名及预约编号。
 
 ## 运行
 
@@ -9,7 +123,7 @@
 python instant_book.py --days 2
 ```
 
-默认会读取 `config.yaml`，预约 `booking.plan` 里的座位，并按 `booking.execute_at` 定时提交。
+默认读取 `config.yaml`，使用 `booking.plan` 和 `booking.execute_at`。新模板启用 dry-run；以下预约示例只有在 `booking.dry_run: false` 时才真正提交。
 
 临时改座位或时间可以直接传参数：
 
@@ -90,12 +204,13 @@ python instant_book.py --plan 1:1559:130:8:1 --days 1 --execute-at 20:00:00.500
 ## 本地验证
 
 ```bash
-python -m unittest -v test_booking_reliability test_local_optimization test_submission_speed test_followup_fixes
-python -m unittest -v test_clock_offset test_privacy
+python -m unittest discover -v
 node test_web_polling.js
 ```
 
-新增回归测试使用模拟响应与虚拟时钟，覆盖超时复核、跨楼层同号座位、停止任务、签到状态、预热预算及配置写入失败，也验证响应后 3 秒冷却、连续客户端共享冷却、签名和 Cookie 刷新、慢日志对首包的影响，不会向图书馆发送测试请求。网页保存配置会先校验内容，再原子替换文件，避免写入中断破坏原配置。
+GitHub Actions 在 main 推送、Pull Request 和手动触发时运行上述检查，覆盖 Ubuntu 的 Python 3.11 / 3.12 / 3.13，以及 macOS 的 Python 3.13。Node.js 22 用于页面测试，无需额外 npm 依赖。
+
+回归测试使用模拟响应与虚拟时钟，覆盖超时复核、跨楼层同号座位、停止任务、签到状态、预热预算及配置写入失败，也验证响应后 3 秒冷却、连续客户端共享冷却、签名和 Cookie 刷新、慢日志对首包的影响，不会向图书馆发送测试请求。配置回归覆盖首次运行提示、错误字段、Cookie 格式和离线检查。网页保存配置会先校验内容，再原子替换文件，避免写入中断破坏原配置。
 
 复审回归还覆盖预热候选消失、合法 JSON 缺字段、取消和续座复核，以及等待期间的系统校时。页面测试用 Node.js 执行实际页面函数，模拟断连、重连、查询超时、旧请求晚返回和任务丢失；Node.js 仅用于运行页面测试，日常启动工具不需要。
 
@@ -171,3 +286,7 @@ python instant_book.py --days 2 --fallback-seats 22,23 --execute-at 20:00:00.500
 HTTPS 请求默认校验证书，建议在配置中保留 `session.verify: true`。已有配置若显式设置了 `verify: false`，应改为 `true`；证书错误应通过修复证书或网络配置解决。
 
 任务日志省略用户姓名和 UID，对请求及响应中的账号、Cookie、令牌等字段进行脱敏，真实请求仍使用原始数据。网页默认配置路径显示为 `config.yaml`，任务日志路径显示为 `logs/` 下的相对路径。日志仍包含预约座位、时段和预约编号，分享前请自行检查。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，版权署名使用 GitHub 用户名 `0D00-0721-0`。

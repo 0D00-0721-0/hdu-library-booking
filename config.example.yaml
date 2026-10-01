@@ -1,0 +1,50 @@
+# 复制为 config.yaml 后，按 README 准备自己的登录态。
+# 此文件只含公共接口和示例参数，不含个人账号、Cookie 或令牌。
+urls:
+  query_rooms: https://hdu.huitu.zhishulib.com/Space/Category/list
+  query_seats: https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats
+  book_seat: https://hdu.huitu.zhishulib.com/Seat/Index/bookSeats
+  user_base_info: https://hdu.huitu.zhishulib.com/User/Center/baseInfo
+  user_center: https://hdu.huitu.zhishulib.com/User/Center/index
+  my_bookings: https://hdu.huitu.zhishulib.com/Seat/Index/myBookingList
+  cancel_booking: https://hdu.huitu.zhishulib.com/Seat/Index/cancelBooking
+  cancel_times_limit: https://hdu.huitu.zhishulib.com/Seat/Index/cancelTimesLimit
+  check_in: https://hdu.huitu.zhishulib.com/Seat/Index/checkIn
+  come_back: https://hdu.huitu.zhishulib.com/Seat/Index/comeBack
+
+session:
+  headers:
+    Accept: application/json, text/plain, */*
+    Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+    Origin: https://hdu.huitu.zhishulib.com
+    Referer: https://hdu.huitu.zhishulib.com/
+    User-Agent: libcs
+  params:
+    LAB_JSON: "1"
+  verify: true
+  trust_env: false  # 需要系统代理时可改为 true
+
+auth:
+  # 相对路径从启动命令所在目录解析，请先 cd 到项目目录。
+  cookie_file: cookies/session.json
+  # 也可直接填写浏览器请求的 Cookie 头；使用此方式时清空 cookie_file。
+  cookie: ""
+
+user_info:
+  uid: ""   # 默认从登录接口自动识别；不是学号
+  name: ""  # 无需填写
+
+request:
+  timeout: 10
+  keepalive_interval: 120
+
+booking:
+  # 示例：自习室 / 四楼 / 21 座 / 08:00 / 1 小时，使用前按实际需求修改。
+  plan: "1:1558:21:8:1"
+  fallback_seats: ""
+  book_days: 2
+  execute_at: "20:00:00"
+  max_trials: 10
+  retry_delay: 3
+  hold_before_minutes: 0
+  dry_run: true  # 首次使用只查询；确认配置后才改成 false

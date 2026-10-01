@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from math import ceil, floor, isfinite
 from pathlib import Path
-from urllib.parse import unquote, urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 import yaml
@@ -295,7 +295,10 @@ class InstantBooker:
         if not path.exists():
             raise RuntimeError("Cookie 文件不存在，请检查 auth.cookie_file 配置")
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("Cookie 文件必须是 UTF-8 JSON，请参考 README 的登录态格式") from exc
         self._apply_user_info_candidate(self._find_user_info(data))
         return self._load_cookie_json(data)
 
@@ -761,8 +764,69 @@ class InstantBooker:
 
 
 def load_config(path):
-    with Path(path).open("r", encoding="utf-8") as file:
-        return yaml.safe_load(file)
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "配置文件不存在。请在项目目录复制 config.example.yaml 为 config.yaml，"
+            "按 README 填写登录态；自定义配置使用 --config 指定。"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError("配置文件必须使用 UTF-8 编码") from exc
+    try:
+        config = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        location = f"（第 {mark.line + 1} 行，第 {mark.column + 1} 列）" if mark else ""
+        # Do not echo a YAML excerpt: it can contain Cookie values.
+        raise ValueError(f"配置 YAML 格式错误{location}，请检查缩进和引号") from exc
+    if not isinstance(config, dict):
+        raise ValueError("配置内容必须是 YAML 字段映射，请参考 config.example.yaml")
+    for section in ("urls", "session", "auth", "request", "booking", "user_info"):
+        if section in config and not isinstance(config[section], dict):
+            raise ValueError(f"配置 {section} 必须是字段映射，请检查缩进")
+    session = config.get("session", {})
+    for key in ("headers", "params"):
+        if key in session and not isinstance(session[key], dict):
+            raise ValueError(f"配置 session.{key} 必须是字段映射")
+    for section, key in (("session", "verify"), ("session", "trust_env"), ("booking", "dry_run")):
+        if key in config.get(section, {}) and not isinstance(config[section][key], bool):
+            raise ValueError(f"配置 {section}.{key} 必须是 true 或 false，不要加引号")
+    for key in ("cookie", "cookie_file"):
+        if key in config.get("auth", {}) and not isinstance(config["auth"][key], str):
+            raise ValueError(f"配置 auth.{key} 必须是字符串")
+    return config
+
+
+def check_config(path):
+    """Check local setup without contacting the library or printing credentials."""
+    config = load_config(path)
+    if "headers" not in config.get("session", {}):
+        raise ValueError("缺少 session.headers，请参考 config.example.yaml")
+    urls = config.get("urls", {})
+    required_urls = ["query_rooms", "query_seats", "book_seat"]
+    if not (config.get("user_info") or {}).get("uid"):
+        required_urls.append("user_base_info")
+    for key in required_urls:
+        value = urls.get(key)
+        parsed = urlparse(value) if isinstance(value, str) else None
+        if parsed is None or parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError(f"配置 urls.{key} 必须是完整的 HTTPS 地址")
+    booking = config.get("booking", {})
+    plan = parse_plan(str(booking.get("plan") or ""))
+    if (plan["room_type"] < 1 or plan["floor_id"] < 1 or not plan["seat_num"].isdigit()
+            or not 0 <= plan["start_hour"] <= 23 or plan["duration_hours"] < 1
+            or plan["start_hour"] + plan["duration_hours"] > 24):
+        raise ValueError("booking.plan 的房间、楼层、座位、小时或时长无效")
+    parse_fallback_seats(booking.get("fallback_seats"), primary_seat=plan["seat_num"])
+    if int(booking.get("book_days", DEFAULT_BOOK_DAYS)) not in (0, 1, 2):
+        raise ValueError("booking.book_days 只支持 0、1、2")
+    normalize_execute_at(booking.get("execute_at"))
+    booker = InstantBooker(config)
+    try:
+        booker.load_cookies()
+    finally:
+        booker.session.close()
 
 
 def parse_plan(plan_text):
@@ -1298,6 +1362,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="HDU 图书馆即时预约")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="配置文件路径")
     action = parser.add_mutually_exclusive_group()
+    action.add_argument("--check-config", action="store_true", help="离线检查配置和 Cookie 格式，不发送网络请求")
     action.add_argument("--list-bookings", action="store_true", help="列出当前座位预约")
     action.add_argument("--list-checkins", action="store_true", help="列出当前待签到预约和计划自动签到时间")
     action.add_argument("--cancel-booking", metavar="BOOKING_ID", help="取消指定 bookingId 的座位预约")
@@ -2250,6 +2315,10 @@ def run_booking(
 
 def main():
     args = parse_args()
+    if args.check_config:
+        check_config(args.config)
+        print("本地配置和 Cookie 格式检查通过；尚未验证登录有效性、座位状态或服务端预约规则。")
+        return
     if args.list_bookings:
         print_booking_list(args.config)
         return

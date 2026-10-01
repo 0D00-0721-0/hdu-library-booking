@@ -1,5 +1,6 @@
 .cloudflare-access-password
 __pycache__/
+.venv/
 logs/
 output/
 .DS_Store
