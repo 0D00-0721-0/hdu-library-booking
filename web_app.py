@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from privacy import redact_private_text
+
 from instant_book import (
     DEFAULT_AUTO_CHECK_IN_DELAY_MINUTES,
     DEFAULT_BOOK_DAYS,
@@ -41,6 +43,7 @@ from instant_book import (
     parse_plan,
     run_auto_check_in,
     run_booking,
+    safe_check_in_response,
 )
 
 
@@ -1444,7 +1447,7 @@ def booking_form_from_config(config_path):
         parse_fallback_seats(booking.get("fallback_seats"), primary_seat=plan["seat_num"])
     )
     return {
-        "config_path": str(path),
+        "config_path": config_path_for_display(path),
         "room_type": plan["room_type"],
         "floor_id": plan["floor_id"],
         "seat_num": plan["seat_num"],
@@ -1463,7 +1466,7 @@ def booking_form_from_config(config_path):
 def bookings_from_config(config_path):
     path = web_config_path(config_path)
     return {
-        "config_path": str(path),
+        "config_path": config_path_for_display(path),
         "items": get_current_bookings(path),
     }
 
@@ -1612,10 +1615,17 @@ def config_path_from_payload(payload):
 
 def web_config_path(raw_path):
     """Resolve the UI config path and lock remote sessions to the default file."""
-    path = Path(str(raw_path or DEFAULT_CONFIG).strip()).expanduser()
+    value = str(raw_path or DEFAULT_CONFIG).strip()
+    path = DEFAULT_CONFIG if value == DEFAULT_CONFIG.name else Path(value).expanduser()
     if WEB_AUTH_PASSWORD and path.resolve() != DEFAULT_CONFIG.resolve():
         raise ValueError("远程访问仅允许使用默认配置文件")
     return path
+
+
+def config_path_for_display(path):
+    if path.resolve() == DEFAULT_CONFIG.resolve():
+        return DEFAULT_CONFIG.name
+    return str(path)
 
 
 def atomic_write_config(path, text):
@@ -1768,7 +1778,7 @@ def job_snapshot_locked(job):
         "poll_after_ms": job_poll_after_ms(job),
         "started_at": job["started_at"],
         "finished_at": job["finished_at"],
-        "log_path": str(job["log_path"]),
+        "log_path": f"logs/{job['log_path'].name}",
     }
 
 
@@ -1811,7 +1821,7 @@ def create_job_record(job_type="generic", mode=""):
 def append_job_log(job, message):
     with JOBS_LOCK:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        line = f"[{stamp}] {message}"
+        line = f"[{stamp}] {redact_private_text(message)}"
         job["logs"].append(line)
         try:
             with job["log_path"].open("a", encoding="utf-8") as file:
@@ -1830,9 +1840,9 @@ def execute_job(job, action):
     except TaskCancelled:
         status, message = "cancelled", "任务已停止"
     except ResultUncertain as exc:
-        status, error, message = "uncertain", str(exc), str(exc)
+        status, error, message = "uncertain", redact_private_text(exc), redact_private_text(exc)
     except Exception as exc:
-        status, error, message = "error", str(exc), f"失败：{exc}"
+        status, error, message = "error", redact_private_text(exc), f"失败：{redact_private_text(exc)}"
     else:
         status, message = "done", "执行完成"
         if isinstance(result, dict):
@@ -1889,7 +1899,7 @@ def start_booking_job(payload, force_immediate=False):
             ),
         )
 
-    append_job_log(job, f"持久化日志：{job['log_path']}")
+    append_job_log(job, f"持久化日志：logs/{job['log_path'].name}")
     append_job_log(job, "执行模式：立即预约" if mode == "immediate" else f"执行模式：定时预约 {execute_at}")
     threading.Thread(target=worker, daemon=True).start()
     return job_id
@@ -1921,7 +1931,7 @@ def start_auto_check_in_job(payload):
             ),
         )
 
-    append_job_log(job, f"持久化日志：{job['log_path']}")
+    append_job_log(job, f"持久化日志：logs/{job['log_path'].name}")
     threading.Thread(target=worker, daemon=True).start()
     return job_id
 
@@ -1961,7 +1971,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            html = INDEX_HTML.replace("__DEFAULT_CONFIG__", str(DEFAULT_CONFIG))
+            html = INDEX_HTML.replace("__DEFAULT_CONFIG__", DEFAULT_CONFIG.name)
             self.send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/config":
@@ -2077,7 +2087,7 @@ class WebHandler(BaseHTTPRequestHandler):
         return {
             "message": "预约已取消",
             "booking_id": result["booking_id"],
-            "result": result["result"],
+            "result": safe_check_in_response(result["result"]),
         }
 
     def check_in_test(self):
@@ -2108,11 +2118,11 @@ class WebHandler(BaseHTTPRequestHandler):
         try:
             data = callback()
         except JobNotFound as exc:
-            self.send_json({"error": str(exc), "code": "job_not_found"}, status=404)
+            self.send_json({"error": redact_private_text(exc), "code": "job_not_found"}, status=404)
         except ResultUncertain as exc:
-            self.send_json({"error": str(exc), "code": "outcome_uncertain"}, status=409)
+            self.send_json({"error": redact_private_text(exc), "code": "outcome_uncertain"}, status=409)
         except Exception as exc:
-            self.send_json({"error": str(exc)}, status=400)
+            self.send_json({"error": redact_private_text(exc)}, status=400)
         else:
             self.send_json(data)
 

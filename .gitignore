@@ -6,3 +6,11 @@ output/
 config.yaml
 .backups/
 .playwright-cli/
+cookies/
+*cookie*.json
+auth.json
+storage-state*.json
+storage_state*.json
+.env
+.env.*
+!.env.example

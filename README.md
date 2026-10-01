@@ -91,7 +91,7 @@ python instant_book.py --plan 1:1559:130:8:1 --days 1 --execute-at 20:00:00.500
 
 ```bash
 python -m unittest -v test_booking_reliability test_local_optimization test_submission_speed test_followup_fixes
-python -m unittest -v test_clock_offset
+python -m unittest -v test_clock_offset test_privacy
 node test_web_polling.js
 ```
 
@@ -163,3 +163,11 @@ python instant_book.py --days 2 --fallback-seats 22,23 --execute-at 20:00:00.500
 - `durationHours`：预约时长，单位小时。
 
 这个工具只在配置的小窗口内做有限重试，不会持续高频请求。
+
+## 隐私与登录态
+
+不要分享 `config.yaml`、Cookie 导出文件、`.cloudflare-access-password` 或运行日志。Cookie 文件建议放在已被 Git 忽略的 `cookies/` 目录中；常见 Cookie JSON、浏览器登录态 JSON 和 `.env` 文件也已加入忽略规则。
+
+HTTPS 请求默认校验证书，建议在配置中保留 `session.verify: true`。已有配置若显式设置了 `verify: false`，应改为 `true`；证书错误应通过修复证书或网络配置解决。
+
+任务日志省略用户姓名和 UID，对请求及响应中的账号、Cookie、令牌等字段进行脱敏，真实请求仍使用原始数据。网页默认配置路径显示为 `config.yaml`，任务日志路径显示为 `logs/` 下的相对路径。日志仍包含预约座位、时段和预约编号，分享前请自行检查。

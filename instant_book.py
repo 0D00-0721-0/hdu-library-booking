@@ -15,8 +15,9 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin
 
 import requests
-import urllib3
 import yaml
+
+from privacy import diagnostic_json, redact_diagnostic_data
 
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
@@ -254,8 +255,7 @@ class InstantBooker:
         self.session.headers.pop("Cookie", None)
         self.session.params = config["session"].get("params") or {"LAB_JSON": "1"}
         self.session.trust_env = bool(config["session"].get("trust_env", False))
-        self.session.verify = bool(config["session"].get("verify", False))
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        self.session.verify = bool(config["session"].get("verify", True))
 
         self.uid = str((config.get("user_info") or {}).get("uid") or "")
         self.name = str((config.get("user_info") or {}).get("name") or "")
@@ -293,7 +293,7 @@ class InstantBooker:
         if not path.is_absolute():
             path = Path.cwd() / path
         if not path.exists():
-            raise RuntimeError(f"Cookie 文件不存在：{path}")
+            raise RuntimeError("Cookie 文件不存在，请检查 auth.cookie_file 配置")
 
         data = json.loads(path.read_text(encoding="utf-8"))
         self._apply_user_info_candidate(self._find_user_info(data))
@@ -358,7 +358,7 @@ class InstantBooker:
         if not remote_uid:
             raise RuntimeError("登录态校验失败：接口未返回 uid")
         if self.uid and remote_uid != self.uid:
-            raise RuntimeError(f"登录用户不匹配：配置 uid={self.uid}，接口 uid={remote_uid}")
+            raise RuntimeError("登录用户不匹配，请更新登录态或用户配置")
         self.uid = remote_uid
         if not self.name:
             self.name = str(detail.get("uname") or detail.get("unickname") or "")
@@ -1380,14 +1380,14 @@ def cancel_booking_by_id(config_path=DEFAULT_CONFIG, booking_id=None, logger=pri
     logger(f"正在取消预约 bookingId={booking_id}...")
     result = booker.cancel_booking(booking_id)
     logger("取消接口返回：")
-    logger(json.dumps(result["result"], ensure_ascii=False, indent=2))
+    logger(diagnostic_json(result["result"]))
     logger("取消成功")
     return result
 
 
 def safe_check_in_response(result):
     if not isinstance(result, dict):
-        return {"raw": str(result)}
+        return {"response_type": type(result).__name__}
     safe = {
         "CODE": result.get("CODE"),
         "MESSAGE": result.get("MESSAGE"),
@@ -1401,7 +1401,7 @@ def safe_check_in_response(result):
         }
     else:
         safe["DATA_type"] = type(data).__name__
-    return safe
+    return redact_diagnostic_data(safe)
 
 
 def check_in_precheck_from_item(item, booking_id=None):
@@ -1778,7 +1778,7 @@ def run_booking(
     check_cancel()
     logger("正在读取登录用户标识...")
     booker.resolve_user()
-    logger(f"用户标识已加载，uid={booker.uid}，name={booker.name or '-'}；稍后校验登录态")
+    logger("用户标识已加载；稍后校验登录态")
 
     check_cancel()
     logger("正在查询房间类型...")
@@ -2046,7 +2046,7 @@ def run_booking(
             )
         result = {"dry_run": True, "candidates": candidate_payloads}
         logger("dry-run：已跳过所有预约提交。")
-        logger(json.dumps(result, ensure_ascii=False, indent=2))
+        logger(diagnostic_json(result))
     else:
         submission_attempted = False
 
@@ -2149,7 +2149,7 @@ def run_booking(
                 elapsed_ms = log_submission()
                 logger(f"预约接口已响应：耗时={elapsed_ms:.1f} ms")
                 logger("预约接口返回：")
-                logger(json.dumps(candidate_result, ensure_ascii=False, indent=2))
+                logger(diagnostic_json(candidate_result))
 
                 if booking_result_succeeded(candidate_result):
                     expected_booking_id = candidate_result["DATA"]["bookingId"]
