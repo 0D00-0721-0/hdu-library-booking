@@ -1,6 +1,6 @@
 # HDU 图书馆即时预约
 
-[![Tests](https://github.com/0D00-0721-0/libcs/actions/workflows/tests.yml/badge.svg)](https://github.com/0D00-0721-0/libcs/actions/workflows/tests.yml)
+[![Tests](https://github.com/0D00-0721-0/hdu-library-booking/actions/workflows/tests.yml/badge.svg)](https://github.com/0D00-0721-0/hdu-library-booking/actions/workflows/tests.yml)
 
 使用自己的浏览器 Cookie 登录态，查询座位、按计划预约，并复核预约、取消、签到和续座结果。提供命令行和本地网页控制台，支持备选座位、定时提交与服务端时钟测量。
 
@@ -17,8 +17,8 @@
 推荐 Python 3.11–3.13。以下为 macOS / Linux 命令；macOS 启动脚本优先使用项目内的 `.venv`。
 
 ```bash
-git clone https://github.com/0D00-0721-0/libcs.git
-cd libcs
+git clone https://github.com/0D00-0721-0/hdu-library-booking.git
+cd hdu-library-booking
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
