@@ -2,15 +2,17 @@
 
 import base64
 import hashlib
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import requests
 
-import instant_book as ib
-import web_app as web
+from libcs import booking, client, configuration, errors
+from libcs.web import jobs as web_jobs
 from test_local_optimization import FakeBooker
+from test_support import patch_runtime_datetime
 
 
 class VirtualClock:
@@ -39,11 +41,11 @@ class SpeedTestCase(unittest.TestCase):
     def setUp(self):
         self.clock = VirtualClock()
         for patcher in (
-            patch.object(ib, "datetime", self.clock),
-            patch.object(ib.time, "time", self.clock.time),
-            patch.object(ib.time, "monotonic", self.clock.monotonic),
-            patch.object(ib.time, "sleep", self.clock.sleep),
-            patch.object(ib, "_BOOKING_GATES", {}),
+            patch_runtime_datetime(self.clock),
+            patch.object(time, "time", self.clock.time),
+            patch.object(time, "monotonic", self.clock.monotonic),
+            patch.object(time, "sleep", self.clock.sleep),
+            patch.object(client, "_BOOKING_GATES", {}),
             patch("requests.sessions.Session.request", side_effect=AssertionError("No upstream HTTP allowed")),
         ):
             patcher.start()
@@ -51,7 +53,7 @@ class SpeedTestCase(unittest.TestCase):
         self.begin = self.clock.origin + timedelta(days=2)
 
     def booker(self, uid="123"):
-        booker = ib.InstantBooker({
+        booker = client.InstantBooker({
             "urls": {"book_seat": "https://hdu.huitu.zhishulib.com/Seat/Index/bookSeats"},
             "session": {"headers": {}, "verify": True},
             "user_info": {"uid": uid},
@@ -76,9 +78,9 @@ class CooldownTests(SpeedTestCase):
     def test_config_and_web_cannot_lower_three_second_minimum(self):
         for value in (0, -1, 0.05, "0.2", float("nan"), float("inf"), None, "invalid"):
             with self.subTest(value=value):
-                self.assertEqual(ib.normalize_retry_delay(value), 3.0)
-                self.assertEqual(web.normalize_retry_delay(value), 3.0)
-        self.assertEqual(ib.normalize_retry_delay(5), 5)
+                self.assertEqual(configuration.normalize_retry_delay(value), 3.0)
+                self.assertEqual(configuration.normalize_retry_delay(value), 3.0)
+        self.assertEqual(configuration.normalize_retry_delay(5), 5)
 
     def test_new_client_and_fallback_share_account_cooldown_after_response(self):
         first, second = self.booker(), self.booker()
@@ -102,10 +104,10 @@ class CooldownTests(SpeedTestCase):
             sent.append(self.clock.elapsed)
             self.clock.sleep(0.2)
             if len(sent) == 1:
-                raise ib.RequestFailure("connect timeout", True, outcome_unknown=False)
+                raise errors.RequestFailure("connect timeout", True, outcome_unknown=False)
             return {"CODE": "ok"}
         booker.request = request
-        with self.assertRaises(ib.RequestFailure):
+        with self.assertRaises(errors.RequestFailure):
             booker.book("21", self.begin, 1)
         booker.book("22", self.begin, 1)
         self.assertGreaterEqual(sent[1] - (sent[0] + 0.2), 3)
@@ -124,7 +126,7 @@ class CooldownTests(SpeedTestCase):
         booker.request = Mock(return_value={})
         result = booker.book("21", self.begin, 1, dry_run=True)
         self.assertTrue(result["dry_run"])
-        self.assertEqual(ib._BOOKING_GATES, {})
+        self.assertEqual(client._BOOKING_GATES, {})
         booker.book("21", self.begin, 1)
         self.assertEqual(self.clock.elapsed, 0)
 
@@ -132,7 +134,7 @@ class CooldownTests(SpeedTestCase):
         booker = self.booker()
         booker.request = Mock(return_value={})
         booker.book("21", self.begin, 1)
-        with self.assertRaises(ib.TaskCancelled):
+        with self.assertRaises(errors.TaskCancelled):
             booker.book("22", self.begin, 1, should_cancel=lambda: self.clock.elapsed >= 0.2)
         self.assertEqual(booker.request.call_count, 1)
         booker.book("23", self.begin, 1)
@@ -152,7 +154,7 @@ class RequestPreparationTests(SpeedTestCase):
         booker = self.booker()
         captured = []
         booker.request = lambda method, url, data=None, headers=None: captured.append((dict(data), dict(headers))) or {}
-        template = ib.prepare_booking_request(booker.uid, "21", self.begin, 1)
+        template = client.prepare_booking_request(booker.uid, "21", self.begin, 1)
         booker.book("21", self.begin, 1, prepared=template)
         booker.book("21", self.begin, 1, prepared=template)
         self.assertEqual(captured[1][0]["api_time"] - captured[0][0]["api_time"], 3)
@@ -176,7 +178,7 @@ class RequestPreparationTests(SpeedTestCase):
             cookies.append(prepared.headers["Cookie"])
             booker._load_cookie_header("auth=new")
             return Mock(status_code=200, json=Mock(return_value={"CODE": "ok"}))
-        template = ib.prepare_booking_request(booker.uid, "21", self.begin, 1)
+        template = client.prepare_booking_request(booker.uid, "21", self.begin, 1)
         with patch.object(booker.session, "post", side_effect=post):
             booker.book("21", self.begin, 1, prepared=template)
             booker.book("21", self.begin, 1, prepared=template)
@@ -196,9 +198,9 @@ class RequestPreparationTests(SpeedTestCase):
         fake._query_seat_map_once = warm
         book = Mock(wraps=fake.book)
         fake.book = book
-        with patch.object(ib, "load_config", return_value={"booking": {}}), \
-             patch.object(ib, "InstantBooker", return_value=fake):
-            ib.run_booking(plan_text="1:1558:21:8:1", days=2, execute_at="20:00:06",
+        with patch.object(configuration, "load_config", return_value={"booking": {}}), \
+             patch.object(client, "InstantBooker", return_value=fake):
+            booking.run_booking(plan_text="1:1558:21:8:1", days=2, execute_at="20:00:06",
                            max_trials=1, logger=lambda _: None)
         template = book.call_args.kwargs["prepared"]
         self.assertEqual(template["payload"]["seats[0]"], "777")
@@ -212,7 +214,7 @@ class FirstSendTests(SpeedTestCase):
         log_times = []
         template_times = []
         original_book = fake.book
-        original_prepare = ib.prepare_booking_request
+        original_prepare = client.prepare_booking_request
         def book(*args, **kwargs):
             send_times.append(self.clock.elapsed)
             self.clock.sleep(0.02)
@@ -225,10 +227,10 @@ class FirstSendTests(SpeedTestCase):
             if "到点偏差" in message or "[try=" in message:
                 log_times.append(self.clock.elapsed)
                 self.clock.sleep(0.25)
-        with patch.object(ib, "load_config", return_value={"booking": {}}), \
-             patch.object(ib, "InstantBooker", return_value=fake), \
-             patch.object(ib, "prepare_booking_request", side_effect=prepare):
-            ib.run_booking(plan_text="1:1558:21:8:1", days=2, execute_at="20:00:00.920",
+        with patch.object(configuration, "load_config", return_value={"booking": {}}), \
+             patch.object(client, "InstantBooker", return_value=fake), \
+             patch.object(client, "prepare_booking_request", side_effect=prepare):
+            booking.run_booking(plan_text="1:1558:21:8:1", days=2, execute_at="20:00:00.920",
                            max_trials=1, logger=slow_logger)
         self.assertAlmostEqual(send_times[0], 1.92)
         self.assertTrue(all(when >= send_times[0] + 0.02 for when in log_times))
@@ -250,18 +252,18 @@ class FirstSendTests(SpeedTestCase):
 class PollingTests(SpeedTestCase):
     def test_long_wait_uses_two_second_polling(self):
         job = {"status": "running", "execute_timestamp": self.clock.time() + 3600}
-        self.assertEqual(web.job_poll_after_ms(job), 2000)
+        self.assertEqual(web_jobs.job_poll_after_ms(job), 2000)
 
     def test_critical_window_waits_until_after_target(self):
         for remaining in (2, 1.2, 0.1):
             with self.subTest(remaining=remaining):
                 job = {"status": "running", "execute_timestamp": self.clock.time() + remaining}
-                delay = web.job_poll_after_ms(job) / 1000
+                delay = web_jobs.job_poll_after_ms(job) / 1000
                 self.assertGreater(delay, remaining + 0.49)
 
     def test_after_send_polling_resumes(self):
         job = {"status": "running", "execute_timestamp": self.clock.time() - 1}
-        self.assertEqual(web.job_poll_after_ms(job), 1000)
+        self.assertEqual(web_jobs.job_poll_after_ms(job), 1000)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,9 @@ import json
 import re
 from pathlib import Path
 
+from libcs.constants import PROJECT_ROOT
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent)
+_PROJECT_ROOT = str(PROJECT_ROOT)
 _HOME = str(Path.home())
 _PRIVATE_KEYS = {
     "uid", "userid", "userinfo", "userbaseinfo", "booker", "bookername",

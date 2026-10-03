@@ -4,8 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "web_app.py"), "utf8");
-const page = source.slice(source.indexOf("<script>") + 8, source.indexOf("</script>"));
+const page = fs.readFileSync(path.join(__dirname, "libcs/web/static/console.js"), "utf8");
+const html = fs.readFileSync(path.join(__dirname, "libcs/web/static/index.html"), "utf8");
 new vm.Script(page);
 function functionSource(name, next) {
   const start = page.indexOf(`    async function ${name}(`);
@@ -136,13 +136,30 @@ async function main() {
     const timers = new Map();
     let id = 0;
     const ctx = vm.createContext({
-      fetch, AbortController,
+      fetch, AbortController, csrfToken: "test-csrf-token",
       setTimeout(fn, ms) { const key = ++id; timers.set(key, {fn, ms}); return key; },
       clearTimeout(key) { timers.delete(key); },
     });
     vm.runInContext(functionSource("requestJson", "loadConfig"), ctx);
     return {ctx, timers};
   }
+  await check("mutations carry CSRF token and preserve custom headers", async () => {
+    const t = transport(async (url, options) => {
+      assert.equal(options.headers["X-CSRF-Token"], "test-csrf-token");
+      assert.equal(options.headers["Content-Type"], "application/json");
+      assert.equal(options.headers["X-Test"], "kept");
+      return {ok: true, json: async () => ({})};
+    });
+    await t.ctx.requestJson("/api/save", {method: "POST", headers: {"X-Test": "kept"}, body: "{}"});
+  });
+  await check("read requests do not send CSRF token", async () => {
+    const t = transport(async (url, options) => {
+      assert.equal(options.headers["X-CSRF-Token"], undefined);
+      return {ok: true, json: async () => ({})};
+    });
+    await t.ctx.requestJson("/api/config");
+  });
+
   await check("request timeout aborts status read and clears timer", async () => {
     const t = transport(async (_url, options) => new Promise((_resolve, reject) => {
       options.signal.addEventListener("abort", () => reject(new Error("aborted")));
@@ -177,8 +194,45 @@ async function main() {
     assert.equal(sent, 1);
     assert.equal(t.timers.size, 0);
   });
+  await check("login starts a single cancellable task without sending credentials", async () => {
+    assert.ok(html.includes('id="loginBtn"'));
+    const calls = [];
+    const ctx = vm.createContext({
+      fields: {configPath: {value: "config.yaml"}, logBox: {textContent: "old"}},
+      currentJobId: "", pollFailures: 2,
+      setBusy(value) { ctx.busy = value; }, setNotice() {}, setStatus() {},
+      async requestJson(url, options) {
+        calls.push({url, options});
+        return {job_id: "login-1"};
+      },
+      pollJob(id) { ctx.polled = id; },
+    });
+    vm.runInContext(functionSource("loginWithBrowser", "pollJob"), ctx);
+    await ctx.loginWithBrowser();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/login");
+    assert.equal(calls[0].options.method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].options.body), {config_path: "config.yaml"});
+    assert.equal(ctx.polled, "login-1");
+    assert.equal(ctx.busy, true);
+    assert.equal(ctx.pollFailures, 0);
+  });
+  await check("login startup errors restore controls and show an actionable message", async () => {
+    const ctx = vm.createContext({
+      fields: {configPath: {value: "config.yaml"}, logBox: {textContent: ""}},
+      setBusy(value) { ctx.busy = value; }, setNotice(value) { ctx.notice = value; },
+      setStatus(value) { ctx.status = value; },
+      async requestJson() { throw new Error("install requirements-login.txt"); },
+      pollJob() { throw new Error("must not poll a failed startup"); },
+    });
+    vm.runInContext(functionSource("loginWithBrowser", "pollJob"), ctx);
+    await ctx.loginWithBrowser();
+    assert.equal(ctx.busy, false);
+    assert.equal(ctx.status, "失败");
+    assert.equal(ctx.notice, "install requirements-login.txt");
+  });
   await check("clock button shows fresh recommendation during a waiting task", async () => {
-    assert.ok(source.includes('id="measureClockBtn"'));
+    assert.ok(html.includes('id="measureClockBtn"'));
     const ctx = vm.createContext({
       busyState: true, clockMeasuring: false,
       fields: {
