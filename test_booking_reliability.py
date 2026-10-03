@@ -1,3 +1,4 @@
+
 import os
 import tempfile
 import time
@@ -8,8 +9,20 @@ from unittest.mock import patch
 
 import requests
 
-import instant_book
-import web_app
+from libcs import (
+    booking,
+    client,
+    configuration,
+    constants,
+    errors,
+    operations,
+    records,
+    scheduling,
+)
+from libcs.web import assets as web_assets
+from libcs.web import forms as web_forms
+from libcs.web import jobs as web_jobs
+from libcs.web import server as web_server
 
 
 def minimal_config():
@@ -28,7 +41,7 @@ def minimal_config():
 
 class CookieAndAuthTests(unittest.TestCase):
     def test_inline_cookie_uses_cookie_jar_not_fixed_header(self):
-        booker = instant_book.InstantBooker(minimal_config())
+        booker = client.InstantBooker(minimal_config())
         self.assertNotIn("Cookie", booker.session.headers)
 
         self.assertTrue(booker._load_cookie_header("auth=old; uid=123"))
@@ -45,7 +58,7 @@ class CookieAndAuthTests(unittest.TestCase):
         self.assertNotIn("auth=old", prepared.headers.get("Cookie", ""))
 
     def test_authenticated_detail_checks_uid(self):
-        booker = instant_book.InstantBooker(minimal_config())
+        booker = client.InstantBooker(minimal_config())
         self.assertTrue(booker._validate_authenticated_detail({"is_login": True, "uid": 123}))
         with self.assertRaisesRegex(RuntimeError, "登录态已失效"):
             booker._validate_authenticated_detail({"is_login": False, "uid": 123})
@@ -60,22 +73,22 @@ class BookingProtocolTests(unittest.TestCase):
         def sleep(seconds):
             self.clock += seconds
         for patcher in (
-            patch.object(instant_book.time, "monotonic", side_effect=lambda: self.clock),
-            patch.object(instant_book.time, "sleep", side_effect=sleep),
-            patch.object(instant_book, "_BOOKING_GATES", {}),
+            patch.object(time, "monotonic", side_effect=lambda: self.clock),
+            patch.object(time, "sleep", side_effect=sleep),
+            patch.object(client, "_BOOKING_GATES", {}),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
 
     def test_fallback_seat_parser_deduplicates_and_limits(self):
         self.assertEqual(
-            instant_book.parse_fallback_seats("22, 23，21 22", primary_seat="21"),
+            configuration.parse_fallback_seats("22, 23，21 22", primary_seat="21"),
             ["22", "23"],
         )
         with self.assertRaisesRegex(ValueError, "必须是数字"):
-            instant_book.parse_fallback_seats("22,A3", primary_seat="21")
+            configuration.parse_fallback_seats("22,A3", primary_seat="21")
         with self.assertRaisesRegex(ValueError, "最多填写"):
-            instant_book.parse_fallback_seats("1,2,3,4,5,6", primary_seat="21")
+            configuration.parse_fallback_seats("1,2,3,4,5,6", primary_seat="21")
 
     def test_seat_unavailable_message_is_classified(self):
         result = {
@@ -85,10 +98,10 @@ class BookingProtocolTests(unittest.TestCase):
                 "msg": "选择的座位无法预约，可能座位不可用或已经被其他人锁定或占用，请换一个再试",
             },
         }
-        self.assertTrue(instant_book.is_seat_unavailable(result))
+        self.assertTrue(records.is_seat_unavailable(result))
 
     def test_booking_range_validates_duration_and_date(self):
-        booker = instant_book.InstantBooker(minimal_config())
+        booker = client.InstantBooker(minimal_config())
         tz = timezone(timedelta(hours=8))
         detail = {
             "range": {
@@ -127,12 +140,12 @@ class BookingProtocolTests(unittest.TestCase):
         ]
         for result in failures:
             with self.subTest(result=result):
-                self.assertFalse(instant_book.booking_result_succeeded(result))
-                self.assertTrue(instant_book.booking_result_failed(result))
+                self.assertFalse(records.booking_result_succeeded(result))
+                self.assertTrue(records.booking_result_failed(result))
 
         success = {"CODE": "ok", "DATA": {"result": "success", "bookingId": 12345}}
-        self.assertTrue(instant_book.booking_result_succeeded(success))
-        self.assertFalse(instant_book.booking_result_failed(success))
+        self.assertTrue(records.booking_result_succeeded(success))
+        self.assertFalse(records.booking_result_failed(success))
 
     def test_nested_error_message_is_used_for_opening_retry(self):
         result = {
@@ -140,10 +153,10 @@ class BookingProtocolTests(unittest.TestCase):
             "MESSAGE": "请求完成",
             "DATA": {"result": "fail", "msg": "超出可预约座位时间范围"},
         }
-        self.assertTrue(instant_book.is_time_out_of_range(result))
+        self.assertTrue(records.is_time_out_of_range(result))
 
     def test_fixed_seat_uses_per_request_token_header(self):
-        booker = instant_book.InstantBooker(minimal_config())
+        booker = client.InstantBooker(minimal_config())
         captured = {}
 
         def fake_request(method, url, data=None, headers=None, timeout=None):
@@ -171,7 +184,7 @@ class BookingProtocolTests(unittest.TestCase):
                     "room_name": "四楼",
                     "seat_num": "21",
                     "status": status,
-                    "status_label": instant_book.BOOKING_STATUS_LABELS[status],
+                    "status_label": constants.BOOKING_STATUS_LABELS[status],
                 }]
 
             def continue_booking(self, booking_id):
@@ -179,8 +192,8 @@ class BookingProtocolTests(unittest.TestCase):
                 return {"CODE": "ok", "DATA": {"result": "success"}}
 
         fake = FakeBooker()
-        with patch.object(instant_book, "create_booker", return_value=fake):
-            result = instant_book.continue_seat_by_id("unused.yaml", "123", logger=lambda _: None)
+        with patch.object(operations, "create_booker", return_value=fake):
+            result = operations.continue_seat_by_id("unused.yaml", "123", logger=lambda _: None)
 
         self.assertEqual(fake.booking_id, "123")
         self.assertEqual(result["status_code_before"], "2")
@@ -195,14 +208,14 @@ class BookingProtocolTests(unittest.TestCase):
                     "status_label": "暂离未归结束",
                 }]
 
-        with patch.object(instant_book, "create_booker", return_value=FakeBooker()):
+        with patch.object(operations, "create_booker", return_value=FakeBooker()):
             with self.assertRaisesRegex(RuntimeError, "续座期限已过"):
-                instant_book.continue_seat_by_id("unused.yaml", "123", logger=lambda _: None)
+                operations.continue_seat_by_id("unused.yaml", "123", logger=lambda _: None)
 
     def test_request_timeout_is_retryable(self):
-        booker = instant_book.InstantBooker(minimal_config())
+        booker = client.InstantBooker(minimal_config())
         with patch.object(booker.session, "post", side_effect=requests.Timeout("late")):
-            with self.assertRaises(instant_book.RequestFailure) as context:
+            with self.assertRaises(errors.RequestFailure) as context:
                 booker.request("POST", booker.urls["book_seat"], {})
         self.assertTrue(context.exception.retryable)
 
@@ -216,10 +229,10 @@ class BookingProtocolTests(unittest.TestCase):
             "status": "0",
         }
         self.assertEqual(
-            instant_book.find_matching_booking([item], "21", begin, 15),
+            records.find_matching_booking([item], "21", begin, 15),
             item,
         )
-        self.assertIsNone(instant_book.find_matching_booking([item], "22", begin, 15))
+        self.assertIsNone(records.find_matching_booking([item], "22", begin, 15))
 
     def test_run_booking_retries_opening_error_and_confirms_success(self):
         class FakeBooker:
@@ -284,10 +297,10 @@ class BookingProtocolTests(unittest.TestCase):
         fake = FakeBooker()
         config = {"booking": {}, **minimal_config()}
         with (
-            patch.object(instant_book, "load_config", return_value=config),
-            patch.object(instant_book, "InstantBooker", return_value=fake),
+            patch.object(configuration, "load_config", return_value=config),
+            patch.object(client, "InstantBooker", return_value=fake),
         ):
-            result = instant_book.run_booking(
+            result = booking.run_booking(
                 config_path="unused.yaml",
                 plan_text="1:1558:21:7:15",
                 fallback_seats="22",
@@ -348,11 +361,11 @@ class BookingProtocolTests(unittest.TestCase):
 
         config = {"booking": {}, **minimal_config()}
         with (
-            patch.object(instant_book, "load_config", return_value=config),
-            patch.object(instant_book, "InstantBooker", return_value=UnknownResponseBooker()),
+            patch.object(configuration, "load_config", return_value=config),
+            patch.object(client, "InstantBooker", return_value=UnknownResponseBooker()),
         ):
-            with self.assertRaisesRegex(instant_book.ResultUncertain, "结果待确认"):
-                instant_book.run_booking(
+            with self.assertRaisesRegex(errors.ResultUncertain, "结果待确认"):
+                booking.run_booking(
                     config_path="unused.yaml",
                     plan_text="1:1558:21:7:15",
                     days=2,
@@ -433,10 +446,10 @@ class BookingProtocolTests(unittest.TestCase):
         config = {"booking": {}, **minimal_config()}
         logs = []
         with (
-            patch.object(instant_book, "load_config", return_value=config),
-            patch.object(instant_book, "InstantBooker", return_value=fake),
+            patch.object(configuration, "load_config", return_value=config),
+            patch.object(client, "InstantBooker", return_value=fake),
         ):
-            result = instant_book.run_booking(
+            result = booking.run_booking(
                 config_path="unused.yaml",
                 plan_text="1:1558:21:7:15",
                 fallback_seats="99,22,23",
@@ -521,10 +534,10 @@ class BookingProtocolTests(unittest.TestCase):
         config = {"booking": {}, **minimal_config()}
         logs = []
         with (
-            patch.object(instant_book, "load_config", return_value=config),
-            patch.object(instant_book, "InstantBooker", return_value=fake),
+            patch.object(configuration, "load_config", return_value=config),
+            patch.object(client, "InstantBooker", return_value=fake),
         ):
-            result = instant_book.run_booking(
+            result = booking.run_booking(
                 config_path="unused.yaml",
                 plan_text="1:1558:21:7:15",
                 fallback_seats="271",
@@ -549,30 +562,30 @@ class SchedulingTests(unittest.TestCase):
 
     def test_just_missed_execution_uses_grace(self):
         now = datetime(2026, 7, 14, 20, 0, 0, 100_000, tzinfo=self.tz)
-        self.assertEqual(instant_book.build_execute_time("20:00:00", now=now), now)
+        self.assertEqual(scheduling.build_execute_time("20:00:00", now=now), now)
 
     def test_fractional_execution_time_targets_500ms(self):
         now = datetime(2026, 7, 14, 19, 59, 59, tzinfo=self.tz)
-        target = instant_book.build_execute_time("20:00:00.500", now=now)
+        target = scheduling.build_execute_time("20:00:00.500", now=now)
         self.assertEqual(target.hour, 20)
         self.assertEqual(target.second, 0)
         self.assertEqual(target.microsecond, 500_000)
-        self.assertEqual(instant_book.normalize_execute_at("20:00:00.5"), "20:00:00.500")
+        self.assertEqual(configuration.normalize_execute_at("20:00:00.5"), "20:00:00.500")
         self.assertEqual(
-            instant_book.format_execute_datetime(target),
+            scheduling.format_execute_datetime(target),
             "2026-07-14 20:00:00.500",
         )
 
     def test_missed_execution_does_not_silently_roll_to_tomorrow(self):
         now = datetime(2026, 7, 14, 20, 0, 6, tzinfo=self.tz)
         with self.assertRaisesRegex(ValueError, "任务已停止"):
-            instant_book.build_execute_time("20:00:00", now=now)
+            scheduling.build_execute_time("20:00:00", now=now)
 
     def test_wait_until_has_no_200ms_floor(self):
         target = datetime.now().astimezone() + timedelta(seconds=0.05)
         started = time.monotonic()
         logs = []
-        instant_book.wait_until(target, logger=logs.append)
+        scheduling.wait_until(target, logger=logs.append)
         elapsed = time.monotonic() - started
         self.assertGreaterEqual(elapsed, 0.035)
         self.assertLess(elapsed, 0.15)
@@ -582,47 +595,47 @@ class SchedulingTests(unittest.TestCase):
 class PersistentLogTests(unittest.TestCase):
     def test_web_job_log_is_private_and_persistent(self):
         with tempfile.TemporaryDirectory() as directory:
-            old_log_dir = web_app.LOG_DIR
-            web_app.LOG_DIR = Path(directory) / "logs"
+            old_log_dir = web_jobs.LOG_DIR
+            web_jobs.LOG_DIR = Path(directory) / "logs"
             try:
-                with web_app.JOBS_LOCK:
-                    web_app.JOBS.clear()
-                job = web_app.create_job_record()
-                web_app.append_job_log(job, "test-line")
+                with web_jobs.JOBS_LOCK:
+                    web_jobs.JOBS.clear()
+                job = web_jobs.create_job_record()
+                web_jobs.append_job_log(job, "test-line")
                 text = job["log_path"].read_text(encoding="utf-8")
                 self.assertIn("test-line", text)
                 self.assertEqual(os.stat(job["log_path"]).st_mode & 0o777, 0o600)
-                self.assertEqual(os.stat(web_app.LOG_DIR).st_mode & 0o777, 0o700)
+                self.assertEqual(os.stat(web_jobs.LOG_DIR).st_mode & 0o777, 0o700)
             finally:
-                with web_app.JOBS_LOCK:
-                    web_app.JOBS.clear()
-                web_app.LOG_DIR = old_log_dir
+                with web_jobs.JOBS_LOCK:
+                    web_jobs.JOBS.clear()
+                web_jobs.LOG_DIR = old_log_dir
 
 
 class WebImmediateBookingTests(unittest.TestCase):
     def test_force_immediate_ignores_scheduled_time(self):
         payload = {"execute_at": "20:00:00"}
-        self.assertEqual(web_app.booking_execute_at_from_payload(payload), "20:00:00")
+        self.assertEqual(web_forms.booking_execute_at_from_payload(payload), "20:00:00")
         self.assertEqual(
-            web_app.booking_execute_at_from_payload(payload, force_immediate=True),
+            web_forms.booking_execute_at_from_payload(payload, force_immediate=True),
             "",
         )
 
     def test_run_now_handler_forces_immediate_mode(self):
         payload = {"execute_at": "20:00:00", "seat_num": "21"}
-        handler = object.__new__(web_app.WebHandler)
+        handler = object.__new__(web_server.WebHandler)
         handler.read_json = lambda: payload
-        with patch.object(web_app, "start_booking_job", return_value="job-1") as start:
+        with patch.object(web_jobs, "start_booking_job", return_value="job-1") as start:
             result = handler.run_booking_now()
         start.assert_called_once_with(payload, force_immediate=True)
         self.assertEqual(result, {"job_id": "job-1", "mode": "immediate"})
 
     def test_page_has_dedicated_immediate_action(self):
-        self.assertIn('id="instantRunBtn"', web_app.INDEX_HTML)
-        self.assertIn('id="fallbackSeats"', web_app.INDEX_HTML)
-        self.assertIn('id="continueSeatBtn"', web_app.INDEX_HTML)
-        self.assertIn('requestJson("/api/continue-seat"', web_app.INDEX_HTML)
-        self.assertIn('requestJson(immediate ? "/api/run-now" : "/api/run"', web_app.INDEX_HTML)
+        self.assertIn('id="instantRunBtn"', web_assets.INDEX_HTML)
+        self.assertIn('id="fallbackSeats"', web_assets.INDEX_HTML)
+        self.assertIn('id="continueSeatBtn"', web_assets.INDEX_HTML)
+        self.assertIn('requestJson("/api/continue-seat"', web_assets.STATIC_ASSETS["/static/console.js"][1].decode())
+        self.assertIn('requestJson(immediate ? "/api/run-now" : "/api/run"', web_assets.STATIC_ASSETS["/static/console.js"][1].decode())
 
     def test_save_plan_persists_fallback_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -636,7 +649,7 @@ class WebImmediateBookingTests(unittest.TestCase):
                 "  dry_run: false\n",
                 encoding="utf-8",
             )
-            web_app.write_booking_values(
+            web_forms.write_booking_values(
                 path,
                 "1:1558:21:7:15",
                 "22, 23,22",

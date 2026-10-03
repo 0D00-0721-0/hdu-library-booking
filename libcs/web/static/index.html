@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <meta name="default-config" content="__DEFAULT_CONFIG__">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#183842">
+  <title>HDU 图书馆即时预约</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23256f67'/%3E%3Cpath d='M18 16h28v32H18z' fill='%23fffdf6'/%3E%3Cpath d='M23 24h18M23 32h18M23 40h12' stroke='%23b4762e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">跳到主内容</a>
+  <div class="app">
+    <header class="topbar">
+      <div class="bar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">座</div>
+          <div>
+            <div class="kicker">HDU Library / Seat Desk</div>
+            <h1>图书馆预约控制台</h1>
+          </div>
+        </div>
+        <div class="top-tools">
+          <div id="clock" class="clock" aria-label="当前时间">--:--:--</div>
+          <div id="status" class="status" role="status" aria-live="polite">就绪</div>
+        </div>
+      </div>
+    </header>
+    <main id="mainContent">
+      <section class="command-pane" aria-labelledby="controlTitle">
+        <div class="pane-head">
+          <div>
+            <p class="eyebrow">Reservation plan</p>
+            <h2 id="controlTitle">安排下一次预约</h2>
+          </div>
+          <div class="seat-stamp" aria-label="目标座位"><span>座位</span><strong id="seatBadge">--</strong></div>
+        </div>
+        <div id="planSummary" class="plan-strip">载入配置后显示预约计划</div>
+
+        <section class="form-section" aria-labelledby="loginTitle">
+          <div class="section-head"><h3 id="loginTitle">登录态</h3><p>在弹出的浏览器中登录，完成后自动保存 Cookie</p></div>
+          <button id="loginBtn" type="button">登录并获取 Cookie</button>
+        </section>
+
+        <section class="form-section" aria-labelledby="seatSectionTitle">
+          <div class="section-head"><h3 id="seatSectionTitle">座位与时间</h3><p>先选目标座位，再确认预约时段</p></div>
+          <div class="grid">
+            <div class="field wide">
+              <label for="floorId">楼层 / 区域</label>
+              <select id="floorId" name="floor_id" required>
+                <option value="">请选择楼层</option>
+                <option value="1557">二楼东 · 格物E堂</option>
+                <option value="1524">二楼西 · 比特庭园</option>
+                <option value="1554">二楼信息检索室 · 数智渊阁</option>
+                <option value="1558">四楼 · 宋韵云图</option>
+                <option value="1559">六楼 · 杭韵数阁</option>
+                <option value="1543">十二楼 · 芯灵驿站</option>
+              </select>
+            </div>
+            <div class="field"><label for="seatNum">座位号</label><input id="seatNum" name="seat_num" type="number" min="1" step="1" autocomplete="off"></div>
+            <div class="field"><label for="fallbackSeats">备选座位</label><input id="fallbackSeats" name="fallback_seats" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 22,23"></div>
+            <div class="field"><label for="startHour">开始小时</label><input id="startHour" name="start_hour" type="number" min="0" max="23" step="1" autocomplete="off"></div>
+            <div class="field"><label for="durationHours">时长（小时）</label><input id="durationHours" name="duration_hours" type="number" min="1" max="24" step="1" autocomplete="off"></div>
+            <div class="field wide"><div class="field-label">预约日期</div>
+              <div class="segmented" id="dayGroup">
+                <label><input type="radio" name="days" value="0"><span>今天</span></label>
+                <label><input type="radio" name="days" value="1"><span>明天</span></label>
+                <label><input type="radio" name="days" value="2"><span>后天</span></label>
+              </div>
+            </div>
+          </div>
+          <div class="map-card" aria-labelledby="mapTitle">
+            <div class="map-head">
+              <div><strong id="mapTitle">座位位置图</strong><small>官方平面图 · 点击座位填入号码</small></div>
+              <div class="map-tools">
+                <button id="refreshMapBtn" type="button">刷新</button>
+                <button id="zoomOutBtn" type="button" aria-label="缩小座位图">−</button>
+                <span id="mapZoom" class="map-zoom">100%</span>
+                <button id="zoomInBtn" type="button" aria-label="放大座位图">+</button>
+              </div>
+            </div>
+            <div class="map-mode" aria-label="点选方式">
+              <button id="pickPrimaryBtn" type="button" aria-pressed="true">选主座位</button>
+              <button id="pickFallbackBtn" type="button" aria-pressed="false">添加备选</button>
+            </div>
+            <div id="mapViewport" class="map-viewport" aria-label="可滚动座位平面图">
+              <div id="mapEmpty" class="map-empty">选择楼层和预约时段后显示座位位置图</div>
+            </div>
+            <div class="map-legend" aria-label="座位图图例">
+              <span><i class="map-dot"></i>可用</span><span><i class="map-dot busy"></i>已占用</span><span><i class="map-dot locked"></i>锁定</span><span><i class="map-dot closed"></i>关闭</span><span><i class="map-dot primary"></i>主座位</span><span><i class="map-dot fallback"></i>备选</span>
+            </div>
+            <p id="mapMessage" class="map-message" role="status" aria-live="polite"></p>
+          </div>
+          <div class="grid">
+            <div class="field wide"><label for="executeAt">定时提交时间</label><input id="executeAt" name="execute_at" type="text" inputmode="decimal" autocomplete="off" placeholder="例如 20:00:00.500"></div>
+            <div class="field wide"><label for="holdBeforeMinutes">提前预留主座位（分钟；0 为关闭，最多 14）</label><input id="holdBeforeMinutes" name="hold_before_minutes" type="number" min="0" max="14" step="1" autocomplete="off"></div>
+          </div>
+          <div class="action-area">
+            <label class="switch"><input id="dryRun" type="checkbox"><span><strong>只测试，不提交</strong><small>检查座位和请求流程</small></span></label>
+            <div class="primary-actions">
+              <button id="instantRunBtn" class="primary" type="button">立即预约</button>
+              <button id="runBtn" type="button">定时预约</button>
+            </div>
+            <div class="support-actions">
+              <button id="measureClockBtn" type="button">测量并推荐时间</button>
+              <button id="cancelBtn" class="danger" type="button" disabled>停止任务</button>
+            </div>
+            <div id="clockResult" class="clock-result" role="status" aria-live="polite" hidden></div>
+            <div id="notice" class="notice" role="status" aria-live="polite"></div>
+          </div>
+        </section>
+
+        <section class="form-section" aria-labelledby="bookingSectionTitle">
+          <div class="section-head"><h3 id="bookingSectionTitle">当前预约</h3><button id="refreshBookingsBtn" type="button">刷新预约</button></div>
+          <div class="field"><label for="bookingSelect">选择预约</label><select id="bookingSelect"></select><div id="bookingMeta" class="booking-meta">刷新当前预约后显示签到窗口和状态</div></div>
+          <div class="booking-actions">
+            <button id="autoCheckInBtn" class="brass" type="button" disabled>自动签到</button>
+            <button id="continueSeatBtn" class="brass" type="button" disabled>续座</button>
+            <button id="checkInTestBtn" type="button" disabled>签到测试</button>
+            <button id="cancelBookingBtn" class="danger" type="button" disabled>取消预约</button>
+          </div>
+        </section>
+
+        <details class="advanced">
+          <summary>高级设置与配置文件</summary>
+          <div class="advanced-inner">
+            <div class="grid">
+              <div class="field wide"><label for="configPath">配置文件</label><input id="configPath" name="config_path" autocomplete="off" spellcheck="false"></div>
+              <div class="field"><label for="roomType">房间类型</label><input id="roomType" name="room_type" type="number" min="1" step="1" autocomplete="off"></div>
+              <div class="field"><label for="maxTrials">重试次数</label><input id="maxTrials" name="max_trials" type="number" min="1" max="20" step="1" autocomplete="off"></div>
+              <div class="field wide"><label for="retryDelay">响应后重试 / 切换间隔（至少 3 秒）</label><input id="retryDelay" name="retry_delay" type="number" min="3" max="10" step="0.1" autocomplete="off"></div>
+            </div>
+            <div class="config-actions"><button id="loadBtn" type="button">载入配置</button><button id="saveBtn" type="button">保存计划</button></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="observer" aria-label="执行状态">
+        <div class="ticket" aria-label="预约概览">
+          <div class="ticket-head"><p class="eyebrow">Seat ticket</p><span class="ticket-tag">预约概览</span></div>
+          <div class="summary-grid" aria-label="关键状态">
+            <div class="metric-card"><span>目标座位</span><strong id="seatMetric">--</strong><small id="floorMetric">楼层 --</small></div>
+            <div class="metric-card"><span>预约时段</span><strong id="timeMetric">--:-- — --:--</strong><small id="submitMetric">提交时间 --</small></div>
+          </div>
+          <div class="ticket-divider" aria-hidden="true"></div>
+          <div class="timeline-panel">
+            <p class="eyebrow">Time markers</p>
+            <div class="timeline" aria-label="预约时间轨">
+              <div class="tick"><strong id="railStart">--:--</strong><span>预约开始</span></div>
+              <div class="tick"><strong id="railSubmit">--:--</strong><span>提交请求</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="log-panel">
+          <div class="log-head"><div><p class="eyebrow">Activity</p><h2>执行日志</h2></div><button id="clearBtn" type="button">清空日志</button></div>
+          <pre id="logBox" aria-live="polite"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/console.js" defer></script>
+</body>
+</html>
